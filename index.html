@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Andrew Hunter</title>
+<title>Phantom</title>
+<link rel="icon" type="image/svg+xml" href="art/favicon.svg">
 <link rel="icon" type="image/png" sizes="64x64" href="art/favicon.png">
 <link rel="apple-touch-icon" href="art/apple-touch-icon.png">
 <style>
@@ -59,11 +60,9 @@
   .venom:focus-visible { outline: 1.5px solid var(--ink); outline-offset: 18px; }
 
   /* chrome: everything around the object speaks in the metadata voice, 11px Manrope caps, hairlines */
-  .eyebrow, .hint, .tune-toggle, .panel, .actions button {
+  .hint, .tune-toggle, .panel, .actions button {
     font: 500 11px/1.5 var(--sans); letter-spacing: 0.12em; text-transform: uppercase;
   }
-  .eyebrow { position: fixed; left: 24px; top: 20px; margin: 0; color: var(--muted); user-select: none; z-index: 20; }
-  .eyebrow b { color: var(--ink); font-weight: 400; }
   .hint { position: fixed; left: 24px; bottom: 20px; margin: 0; user-select: none; color: var(--muted); }
   .hint b { color: var(--ink); font-weight: 400; }
   .hint.is-flash b { color: var(--accent); }
@@ -97,7 +96,7 @@
     background: radial-gradient(120% 140% at 30% 20%, oklch(0.32 0.02 275), oklch(0.12 0.01 270) 60%);
     box-shadow: 0 18px 30px -16px oklch(0.2 0.02 270 / 0.6), inset 0 1px 0 oklch(1 0 0 / 0.18);
   }
-  body.no-gl .hint, body.no-gl .tune-toggle, body.no-gl .modes, body.no-gl .eyebrow { display: none; }
+  body.no-gl .hint, body.no-gl .tune-toggle, body.no-gl .modes { display: none; }
 
   /* render mode switch: venom (studio render), dither (1-bit Bayer), ascii (glyph cells), carnage, 2099 */
   .modes {
@@ -118,10 +117,16 @@
   body.mode-3 { --accent: oklch(0.5 0.21 27); }
   body.mode-4 { --accent: oklch(0.6 0.24 22); }
   body.mode-3 .modes button[aria-checked="true"], body.mode-4 .modes button[aria-checked="true"] { color: oklch(0.98 0 0); }
+  /* brand: the spider eyes as a braille dither (2x4 dots per cell), then the name in the chrome voice */
+  .brand {
+    position: fixed; right: 24px; top: 22px; z-index: 20; display: flex; align-items: center; gap: 10px;
+    color: var(--ink); user-select: none; pointer-events: none;
+  }
+  .brand pre { margin: 0; font: 8px/1 ui-monospace, Menlo, Consolas, monospace; letter-spacing: 0; }
+  .brand span { font: 500 11px/1 var(--sans); letter-spacing: 0.24em; text-transform: uppercase; }
   @media (max-width: 560px) {
-    .modes { left: 16px; right: 16px; top: 18px; transform: none; flex-wrap: wrap; }
-    .eyebrow { top: 64px; }
-    .eyebrow { left: 16px; }
+    .brand { right: 16px; top: 16px; }
+    .modes { left: 16px; right: 16px; top: 52px; transform: none; flex-wrap: wrap; }
     .hint { left: 16px; }
     .tune-toggle { right: 16px; }
     .panel { right: 16px; width: calc(100vw - 32px); }
@@ -131,7 +136,9 @@
 <body>
 <canvas id="stage" aria-hidden="true"></canvas>
 <button class="venom" id="venom" type="button" aria-label="Andrew Hunter">Andrew Hunter</button>
-<p class="eyebrow"><b>Andrew Hunter</b> · Symbiote</p>
+<div class="brand" role="img" aria-label="Phantom"><pre aria-hidden="true">⢕⣄⠀⠀⠀⠀⠀⠀⠀⠄
+⢽⣿⣷⣅⠀⠀⢔⣵⣿⠇
+⠙⣿⣿⣿⠅⢴⢿⣿⡿⠁</pre><span aria-hidden="true">Phantom</span></div>
 <div class="modes" id="modes" role="radiogroup" aria-label="Render mode">
   <button type="button" role="radio" aria-checked="false" data-mode="0">Venom</button>
   <button type="button" role="radio" aria-checked="true" data-mode="1">Dither</button>
@@ -139,6 +146,7 @@
   <button type="button" role="radio" aria-checked="false" data-mode="3">Carnage</button>
   <button type="button" role="radio" aria-checked="false" data-mode="4">2099<kbd>M</kbd></button>
   <span class="sep" aria-hidden="true"></span>
+  <button type="button" id="shapeBtn" aria-label="Show the square slab">Square<kbd>S</kbd></button>
   <button type="button" id="themeBtn" aria-label="Toggle dark mode">Dark<kbd>D</kbd></button>
 </div>
 <p class="hint" id="hint" aria-live="polite"></p>
@@ -244,6 +252,11 @@ function makeBody(i, label, hh, delay) {
     lift: 0, liftV: 0, press: 0, pressV: 0, pressTarget: 0, intro: reduced ? 1 : 0, introV: 0, delay, placed: false };
 }
 const bodies = [makeBody(0, LABEL_TEXT, 92, 0)];   // a 184px square
+// the slab's outline: the Phantom Troupe spider (default) or the plain square, for demos. The spider is a
+// signed distance field over the slab's box, shared by the ray march, the floor shadow and the goo physics
+const SHAPE_N = 640;                    // texels across the spider's field
+const SH = { sdf: null, contour: [], core: [] };  // CPU copy of the field (texels) + outline points (all / body only)
+const shape = { spider: true, v: 1 };   // v eases 0 square → 1 spider, so switching morphs
 const LOGO_CSS = 118;  // on-screen height of the logo mark, px
 const btn = bodies[0];
 const drag = { i: -1, ox: 0, oy: 0, sx: 0, sy: 0, moved: false, wasDrag: false };
@@ -253,7 +266,9 @@ const pull = { x: 0, y: 0, amt: 0, v: 0 };
 const peak = { x: 0, y: 0, amt: 0, v: 0 };
 let time = reduced ? 3 : 0, lastSnap = -1, lastSpawn = -1, lastMicro = -1, nextProbe = 2.6, awareNow = 0;
 let labelAmt = 0, labelTarget = 0;
-let W = 1, H = 1, DPR = 1, quality = 1;
+// retina screens start at 80% of native: the scene is soft goo and smooth light, so 1.6× pixels look the same
+// as 2× and cost a third less, which leaves headroom instead of starting at the edge of the budget
+let W = 1, H = 1, DPR = 1, quality = (devicePixelRatio || 1) >= 2 ? 0.8 : 1;
 let MAXS = 20, MAXC = 22;  // MAXC: thin filaments (finger wraps + mozzarella fibres)
 const WP = 18;              // points per wrap coil
 
@@ -379,6 +394,15 @@ float sdRoundBox(vec2 q, vec2 b, float r) {
   vec2 d = abs(q) - b + r;
   return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
 }
+uniform sampler2D uShapeSDF; // the spider as a signed distance field, in texels, spanning the slab's box
+uniform float uSpider;       // 0 square slab → 1 spider
+float shapeD(vec2 q, vec2 b, float r) {
+  float box = sdRoundBox(q, b, r);
+  if (uSpider < 0.001) return box;
+  vec2 qc = clamp(q, -b, b);
+  float sp = textureLod(uShapeSDF, qc / (2.0 * b) + 0.5, 0.0).r * (b.x + b.y) / ${SHAPE_N}.0 + length(q - qc);
+  return mix(box, sp, uSpider);
+}
 // 2D distance to the slabs + surface displacement, plus the blended top height and lift of whichever slab
 // is nearest (all depend only on xy, so a vertical ray computes them once). Neighbouring slabs are joined
 // with a smooth minimum: pushed together they fuse into one mass, pulled apart the fillet necks and parts
@@ -386,7 +410,7 @@ vec4 button2D(vec2 p) {
   float d = 1e5, wsum = 0.0, top = 0.0, lz = 0.0, dome = 0.0;
   for (int i = 0; i < NBODY; i++) {
     vec4 b = uBody[i], bz = uBodyZ[i];
-    float di = sdRoundBox(p - b.xy, b.zw, bz.z);
+    float di = shapeD(p - b.xy, b.zw, bz.z);
     float w = exp(-max(di, 0.0) * 0.2) + 1e-6;
     top += bz.x * w; lz += bz.y * w; dome += bz.w * w; wsum += w;
     d = smin(d, di, 16.0);
@@ -621,10 +645,19 @@ float sdRoundBox(vec2 q, vec2 b, float r) {
   vec2 d = abs(q) - b + r;
   return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
 }
+uniform sampler2D uShapeSDF; // the spider as a signed distance field, in texels, spanning the slab's box
+uniform float uSpider;       // 0 square slab → 1 spider
+float shapeD(vec2 q, vec2 b, float r) {
+  float box = sdRoundBox(q, b, r);
+  if (uSpider < 0.001) return box;
+  vec2 qc = clamp(q, -b, b);
+  float sp = textureLod(uShapeSDF, qc / (2.0 * b) + 0.5, 0.0).r * (b.x + b.y) / ${SHAPE_N}.0 + length(q - qc);
+  return mix(box, sp, uSpider);
+}
 int nearestBody(vec2 p) {
   int bi = 0; float best = 1e9;
   for (int i = 0; i < NBODY; i++) {
-    float d = sdRoundBox(p - uBodyP[i].xy, uBodyP[i].zw, uBodyH[i].z);
+    float d = shapeD(p - uBodyP[i].xy, uBodyP[i].zw, uBodyH[i].z);
     if (d < best) { best = d; bi = i; }
   }
   return bi;
@@ -696,6 +729,27 @@ float vn(vec2 p) {
   vec2 i = floor(p), f = fract(p);
   vec2 u = f * f * (3.0 - 2.0 * f);
   return mix(mix(hash12(i), hash12(i + vec2(1.0, 0.0)), u.x), mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float fbm(vec2 p) {
+  float a = 0.5, s = 0.0;
+  for (int i = 0; i < 4; i++) { s += a * vn(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; }
+  return s;
+}
+// Carnage's markings, after Bagley: broad ribbons of black that wrap the body like wet ink poured over
+// the form, swelling and tapering, torn along their edges, with finer streaks threading the red between
+// them. They bend with the surface normal so they flow over the bevel instead of sitting on it, and they
+// crawl slowly because the symbiote is alive. Tendrils stay mostly red, with only thin streaks down them
+float carnageInk(vec2 p, vec3 N, float strandness) {
+  vec2 q = p * 0.036 + N.xy * 0.9;
+  float t = uTime * 0.045;
+  vec2 w = vec2(fbm(q * 0.55 + vec2(t, -t * 0.7)), fbm(q * 0.55 + vec2(5.2, 2.7) - t * 0.8)) - 0.5;
+  float band = fbm(q * 1.15 + w * 2.4);
+  float tear = (vn(q * 7.0 + w * 3.0) - 0.5) * 0.09;
+  float width = 0.06 + 0.06 * vn(q * 0.8 + 11.0);
+  float ink = 1.0 - smoothstep(width - 0.015, width + 0.02, abs(band - 0.5) + tear);
+  float band2 = fbm(q * 2.2 - w * 1.6 + 3.3);
+  ink = max(ink, (1.0 - smoothstep(0.008, 0.028, abs(band2 - 0.5) + tear * 0.5)) * 0.7);
+  return ink * mix(1.0, 0.55, strandness);
 }
 // a living room up and to the left, where the key light comes from: a daylight window with mullions and a
 // tree line, a warm wall and a lamp around it. Slightly saturated so the goo feels like it sits in a real
@@ -831,6 +885,7 @@ vec3 shadeGoo(vec2 p, vec4 g) {
   vec3 cRoom = normalize(vec3(-0.34, -0.42, 0.84));
   vec3 rough = vec3(1.0) * Dr * F * 0.06 * sh
              + vec3(0.95, 0.9, 0.84) * pow(max(dot(R, cRoom), 0.0), 10.0) * F * 0.9;
+  vec3 glossy = spec; // the wet look, kept for the symbiotes below
   spec = mix(spec, rough, matte);
 
   vec3 diff = vec3(mix(0.0007, 0.42, uDark)) * (1.8 * max(dot(N, KEY), 0.0) * sh + 0.9 * ao);
@@ -842,7 +897,7 @@ vec3 shadeGoo(vec2 p, vec4 g) {
   vec2 bq = (p - bp.xy) / bp.zw + N.xy * 1.6;
   vec2 dsp = normalize(bq - vec2(uWin[gBi].x, -0.3) + 1e-4) * 0.02;
   vec3 win = vec3(faceWindow(bq + dsp).r, faceWindow(bq).g, faceWindow(bq - dsp).b);
-  col += win * matte * mix(0.6, 1.0, ao);
+  col += win * matte * mix(0.6, 1.0, ao) * (1.0 - uSpider);  // placed for the square face; the spider has no flat face to hold it
 
   // rim light along the bevel: cool from the window side (top left), a softer warm kicker from the
   // bottom right, and a slow glint that travels around the contour so the edge catches and shines
@@ -855,34 +910,48 @@ vec3 shadeGoo(vec2 p, vec4 g) {
   vec3 rimC = vec3(0.82, 0.9, 1.0) * rimL + vec3(1.0, 0.94, 0.86) * rimR + vec3(1.0) * glint * 1.4;
   col += rimC * bevel * 0.5 * (1.0 - strandness) * mix(0.7, 1.0, sh);
 
-  // ── Carnage: the red symbiote. Deep blood-red goo laced with black veins that creep across the surface,
-  // tendrils lit like raw sinew, light leaking red through every thin edge, and a hot rim instead of the
-  // cool studio edge. Everything above is the Venom render; this only blends over it
+  // ── Carnage: the red symbiote as drawn in the comics. Arterial red, not maroon, wrapped in broad ribbons
+  // of black ink; the whole body wet and glossy (the matte rubber face is Venom's), light scattering red
+  // through every thin edge and tendril, and a hot rim instead of the cool studio edge. Everything above
+  // is the Venom render; this only blends over it
   if (uCarnage > 0.001) {
-    vec2 vq = p * 0.05 + N.xy * 1.5;
-    float v1 = vn(vq + vec2(uTime * 0.06, -uTime * 0.04));
-    float v2 = vn(vq * 2.1 + vec2(-uTime * 0.03, uTime * 0.05) + 7.3);
-    float ridge = 1.0 - abs(2.0 * v1 - 1.0);
-    float veins = smoothstep(0.72, 0.96, ridge + 0.18 * (v2 - 0.5));
-    vec3 crim = mix(vec3(0.5, 0.012, 0.025), vec3(0.06, 0.0, 0.006), veins);
-    crim = mix(crim, vec3(0.7, 0.04, 0.04), strandness * 0.5);
-    vec3 diffC = crim * (1.6 * max(dot(N, KEY), 0.0) * sh + 0.8 * ao);
-    diffC += vec3(0.9, 0.06, 0.05) * 0.35 * pow(1.0 - NdV, 2.5) * mix(0.6, 1.0, ao);
-    vec3 specC = spec * vec3(1.0, 0.62, 0.55) + win * matte * 0.3 * vec3(1.0, 0.5, 0.45);
-    vec3 rimK = vec3(1.0, 0.16, 0.1) * (rimL * 1.3 + rimR) + vec3(1.0, 0.8, 0.7) * glint * 1.1;
+    float ink = carnageInk(p, N, strandness);
+    vec3 alb = mix(vec3(0.6, 0.012, 0.02), vec3(0.004, 0.0015, 0.002), ink);
+    float sss = pow(1.0 - NdV, 2.2) * (1.0 - ink * 0.9);
+    vec3 diffC = alb * (1.5 * max(dot(N, KEY), 0.0) * sh + 0.85 * ao)
+               + vec3(0.95, 0.09, 0.04) * (0.3 * sss + 0.18 * strandness * (1.0 - ink)) * mix(0.6, 1.0, ao);
+    // the black ink is slicker still, so the reflections sharpen over it
+    vec3 specC = mix(glossy, rough, matte * 0.65) * vec3(1.0, 0.8, 0.74) * mix(0.8, 1.2, ink)
+               + win * matte * 0.1 * vec3(1.0, 0.6, 0.55);
+    vec3 rimK = vec3(1.0, 0.2, 0.08) * (rimL * 1.1 + rimR * 0.9) * (1.0 - ink * 0.7) + vec3(1.0, 0.9, 0.85) * glint;
     vec3 colC = diffC + specC + rimK * bevel * 0.6 * (1.0 - strandness) * mix(0.7, 1.0, sh);
     col = mix(col, colC, uCarnage);
   }
-  // ── 2099: the midnight-blue suit with electric red edges. Deep navy goo, a crisp red rim light, a red
-  // fresnel bloom along every strand and a cold cyan key sparkle
+  // ── 2099: Miguel O'Hara's suit. The comics colour it blue-black, reading blue only where the light
+  // catches it, so this is a satin spandex: a fine knit, a broad sheen in the fabric's own cobalt along the
+  // key light, a cool fresnel lifting the edges. The red is a crisp stripe set in from the bevel like the
+  // spines on his forearms, and runs down the spine of every tendril like his talons, with a faint glow of
+  // its own in the dark (the Spider-Verse suit)
   if (uFuture > 0.001) {
-    vec3 navy = vec3(0.012, 0.02, 0.085);
-    vec3 red = vec3(1.0, 0.1, 0.16);
-    vec3 diffF = navy * (1.7 * max(dot(N, KEY), 0.0) * sh + 1.0 * ao);
-    float fres = pow(1.0 - NdV, 3.0);
-    vec3 specF = spec * vec3(0.55, 0.7, 1.0) * 0.8 + win * matte * 0.35 * vec3(0.6, 0.7, 1.0);
-    vec3 rimF = red * (rimL * 1.5 + rimR * 1.2 + 0.35) * bevel * (1.0 - strandness) + red * fres * mix(0.8, 1.6, strandness);
-    vec3 colF = diffF + specF + rimF * mix(0.6, 1.0, sh) + vec3(0.5, 0.9, 1.0) * D * F * 0.4 * sh;
+    vec3 navy = vec3(0.008, 0.014, 0.06);
+    vec3 cobalt = vec3(0.06, 0.2, 0.75);
+    vec3 redA = vec3(0.55, 0.012, 0.02);
+    // where the dye is red: a band set in from the lip of the bevel, and the spine of every tendril
+    float slope = 1.0 - N.z;
+    float stripe = smoothstep(0.26, 0.34, slope) * (1.0 - smoothstep(0.62, 0.72, slope)) * (1.0 - strandness);
+    float spine = smoothstep(0.8, 0.92, N.z) * strandness;
+    float redM = max(stripe, spine);
+    vec3 alb = mix(navy, redA, redM);
+    vec3 tint = mix(cobalt, vec3(1.0, 0.25, 0.2), redM); // the sheen carries the fabric's own colour
+    float nl = max(dot(N, KEY), 0.0);
+    float knit = 0.86 + 0.14 * vn(p * 1.4 + N.xy * 3.0) * vn(p * vec2(0.7, 1.4) + 7.0);
+    vec3 diffF = alb * (1.6 * nl * sh + 0.9 * ao) + tint * pow(nl, 2.2) * 0.35 * sh * knit;
+    float fres = pow(1.0 - NdV, 2.4);
+    vec3 sheen = tint * Dr * F * 0.6 * sh * knit + tint * fres * 0.22 * mix(0.6, 1.0, ao);
+    vec3 specF = glossy * mix(vec3(0.5, 0.65, 1.0), vec3(1.0, 0.7, 0.65), redM) * 0.35 * knit
+               + win * matte * 0.25 * vec3(0.5, 0.65, 1.0);
+    vec3 glow = redA * 0.3 * uDark * redM;
+    vec3 colF = diffF + sheen + specF + glow + vec3(0.5, 0.8, 1.0) * D * F * 0.35 * sh;
     col = mix(col, colF, uFuture);
   }
 
@@ -896,7 +965,7 @@ vec3 shadeGoo(vec2 p, vec4 g) {
       // Carnage keeps a white stamp on its red; 2099 stamps the mark in its own red
       vec3 stamp = mix(vec3(3.0), vec3(0.0005), uDark);
       stamp = mix(stamp, vec3(3.0), uCarnage);
-      stamp = mix(stamp, vec3(2.4, 0.12, 0.18), uFuture);
+      stamp = mix(stamp, vec3(1.3, 0.03, 0.05), uFuture);
       if (m > 0.002) col = mix(col, stamp, m);
     }
   }
@@ -934,11 +1003,11 @@ float buttonShadow(vec2 p) {
   for (int i = 0; i < NBODY; i++) {
     vec4 bp = uBodyP[i], bh = uBodyH[i];
     vec2 q = p - bp.xy;
-    float d0 = max(sdRoundBox(q, bp.zw, bh.z), 0.0);
+    float d0 = max(shapeD(q, bp.zw, bh.z), 0.0);
     if (d0 > 160.0) continue;
     float lift = bh.y, h = bh.x + lift;
     vec2 off = -normalize(KEY.xy) * (h * 0.38 + lift * 0.45);
-    float d1 = max(sdRoundBox(q - off, bp.zw - vec2(1.0), max(bh.z - 1.0, 0.0)), 0.0);
+    float d1 = max(shapeD(q - off, bp.zw - vec2(1.0), max(bh.z - 1.0, 0.0)), 0.0);
     float grounded = 1.0 - smoothstep(0.0, 12.0, lift);
     float contact = exp(-d0 / (2.2 + lift * 0.4)) * 0.62 * grounded;           // tight dark crease
     float occl = exp(-d0 / 7.0) * 0.3 * mix(0.45, 1.0, grounded);             // near-field occlusion
@@ -1013,8 +1082,8 @@ function program(fs, names) {
   for (const n of names) u[n] = gl.getUniformLocation(prog, n);
   return { prog, u };
 }
-const p1 = program(FRAG_SCENE, ['uArrowSDF', 'uMorph', 'uCoat', 'uNC', 'uCoil', 'uCBox', 'uHandSDF', 'uHand', 'uHand2', 'uRes', 'uDpr', 'uTime', 'uBody', 'uBodyZ', 'uSlab', 'uPull', 'uPeak', 'uNS', 'uPts', 'uBox', 'uAnc', 'uAncD', 'uNBr', 'uBr', 'uNB', 'uBlob', 'uBlobZ', 'uRip', 'uLabel', 'uLabelBox', 'uEmboss', 'uZTop', 'uK']);
-const p2 = program(FRAG_SHADE, ['uG', 'uLabel', 'uRes', 'uDpr', 'uTime', 'uLabelBox', 'uLabelAmt', 'uLabelLod', 'uIri', 'uCarnage', 'uFuture', 'uZMax', 'uDark', 'uBodyP', 'uBodyH', 'uWin', 'uHandCol', 'uArrowCol', 'uMorph', 'uHand', 'uHand2']);
+const p1 = program(FRAG_SCENE, ['uArrowSDF', 'uMorph', 'uCoat', 'uNC', 'uCoil', 'uCBox', 'uHandSDF', 'uHand', 'uHand2', 'uRes', 'uDpr', 'uTime', 'uBody', 'uBodyZ', 'uSlab', 'uPull', 'uPeak', 'uNS', 'uPts', 'uBox', 'uAnc', 'uAncD', 'uNBr', 'uBr', 'uNB', 'uBlob', 'uBlobZ', 'uRip', 'uLabel', 'uLabelBox', 'uEmboss', 'uZTop', 'uK', 'uShapeSDF', 'uSpider']);
+const p2 = program(FRAG_SHADE, ['uG', 'uLabel', 'uRes', 'uDpr', 'uTime', 'uLabelBox', 'uLabelAmt', 'uLabelLod', 'uIri', 'uCarnage', 'uFuture', 'uZMax', 'uDark', 'uBodyP', 'uBodyH', 'uWin', 'uHandCol', 'uArrowCol', 'uMorph', 'uHand', 'uHand2', 'uShapeSDF', 'uSpider']);
 
 // ── icon textures (arrow + hand): colour (for shading) + signed distance field (for the 3D slab)
 const handColTex = gl.createTexture(), handSdfTex = gl.createTexture();
@@ -1074,6 +1143,125 @@ function buildIcon(cssVar, colTex, sdfTex) {
 buildIcon('--cur-hand', handColTex, handSdfTex);
 buildIcon('--cur-arrow', arrowColTex, arrowSdfTex);
 const vao = gl.createVertexArray();
+
+// ── the Phantom Troupe spider, drawn once from the reference: twelve jagged legs (the upper three pairs reach
+// up, the lower three down), clawed tips that hook inward, a crowned head with two curling chelicerae and a
+// heart-shaped abdomen where the logo sits in place of the number. Coordinates are in the reference image's
+// frame (centre 372, 368); it becomes a signed distance field (Felzenszwalb EDT with sub-pixel edges)
+const shapeTex = gl.createTexture();
+function buildSpider() {
+  const N = SHAPE_N, cv = document.createElement('canvas');
+  cv.width = cv.height = N;
+  const c = cv.getContext('2d');
+  const s = N / 730, X = (x) => (x - 372) * s + N / 2, Y = (y) => (y - 368) * s + N / 2;
+  c.fillStyle = '#fff';
+  const disc = (x, y, r) => { c.beginPath(); c.arc(X(x), Y(y), Math.max(r, 0.01) * s, 0, Math.PI * 2); c.fill(); };
+  const quad = (a, b, wa, wb) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L;
+    c.beginPath();
+    c.moveTo(X(a[0] + nx * wa / 2), Y(a[1] + ny * wa / 2)); c.lineTo(X(b[0] + nx * wb / 2), Y(b[1] + ny * wb / 2));
+    c.lineTo(X(b[0] - nx * wb / 2), Y(b[1] - ny * wb / 2)); c.lineTo(X(a[0] - nx * wa / 2), Y(a[1] - ny * wa / 2));
+    c.closePath(); c.fill();
+  };
+  // a limb: tapered segments, a barb on the outside of every knee, and a last segment that curls toward
+  // the body into a needle claw
+  function limb(pts, ws, curl) {
+    const a = pts[pts.length - 2], b = pts[pts.length - 1];
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+    let nx = -dy / L, ny = dx / L;
+    if ((372 - b[0]) * nx < 0) { nx = -nx; ny = -ny; }          // bend toward the spider's middle
+    const ctl = [(a[0] + b[0]) / 2 + nx * L * curl, (a[1] + b[1]) / 2 + ny * L * curl];
+    const P2 = pts.slice(0, -1), W2 = ws.slice(0, -1), K = 7;
+    for (let k = 1; k <= K; k++) {
+      const t = k / K, u = 1 - t;
+      P2.push([u * u * a[0] + 2 * u * t * ctl[0] + t * t * b[0], u * u * a[1] + 2 * u * t * ctl[1] + t * t * b[1]]);
+      W2.push(ws[ws.length - 2] * (1 - t) ** 1.2 + ws[ws.length - 1] * t);
+    }
+    for (let i = 0; i < P2.length - 1; i++) { quad(P2[i], P2[i + 1], W2[i], W2[i + 1]); if (i) disc(P2[i][0], P2[i][1], W2[i] / 2); }
+    disc(P2[0][0], P2[0][1], W2[0] / 2);
+    for (let i = 1; i < pts.length - 1; i++) {                      // knee barbs
+      const p = pts[i], q0 = pts[i - 1], q1 = pts[i + 1];
+      const ax = q0[0] - p[0], ay = q0[1] - p[1], la = Math.hypot(ax, ay), bx = q1[0] - p[0], by = q1[1] - p[1], lb = Math.hypot(bx, by);
+      let ox = -(ax / la + bx / lb), oy = -(ay / la + by / lb);
+      const lo = Math.hypot(ox, oy);
+      if (lo < 0.15) continue;
+      ox /= lo; oy /= lo;
+      const w = ws[i], tx = bx / lb, ty = by / lb;
+      c.beginPath();
+      c.moveTo(X(p[0] - tx * w * 0.55), Y(p[1] - ty * w * 0.55));
+      c.lineTo(X(p[0] + ox * w * 1.25 + tx * w * 0.5), Y(p[1] + oy * w * 1.25 + ty * w * 0.5));
+      c.lineTo(X(p[0] + tx * w * 0.9), Y(p[1] + ty * w * 0.9));
+      c.closePath(); c.fill();
+    }
+  }
+  const mirror = (pts) => pts.map(([x, y]) => [744 - x, y]);
+  const LEGS = [
+    [[330, 206], [276, 166], [258, 92], [298, 18]],
+    [[321, 214], [224, 206], [188, 120], [212, 32]],
+    [[316, 238], [202, 256], [112, 214], [94, 98]],
+    [[300, 292], [152, 302], [58, 350], [40, 228]],
+    [[290, 368], [190, 444], [102, 506], [120, 640]],
+    [[318, 415], [258, 520], [214, 588], [210, 702]],
+  ];
+  for (const L of LEGS) { limb(L, [17, 12, 9, 0.9], 0.16); limb(mirror(L), [17, 12, 9, 0.9], 0.16); }
+  const CHEL = [[358, 202], [344, 162], [357, 134], [349, 104]];
+  limb(CHEL, [12, 10, 8, 0.9], -0.12); limb(mirror(CHEL), [12, 10, 8, 0.9], -0.12);
+  // head, crown, waist, abdomen
+  c.beginPath(); c.ellipse(X(372), Y(234), 60 * s, 42 * s, 0, 0, Math.PI * 2); c.fill();
+  c.beginPath();
+  [[314, 228], [318, 196], [332, 213], [342, 186], [356, 207], [372, 183], [388, 207], [402, 186], [412, 213], [426, 196], [430, 228]]
+    .forEach(([x, y], i) => (i ? c.lineTo(X(x), Y(y)) : c.moveTo(X(x), Y(y))));
+  c.closePath(); c.fill();
+  c.beginPath(); c.ellipse(X(372), Y(264), 36 * s, 20 * s, 0, 0, Math.PI * 2); c.fill();
+  const AX = (x) => X(372 + (x - 372) * 1.25), AY = (y) => Y(365 + (y - 365) * 1.25); // abdomen, enlarged for the logo
+  c.beginPath(); c.moveTo(AX(372), AY(268));
+  c.bezierCurveTo(AX(332), AY(248), AX(262), AY(262), AX(263), AY(334));
+  c.bezierCurveTo(AX(264), AY(400), AX(330), AY(434), AX(372), AY(474));
+  c.bezierCurveTo(AX(414), AY(434), AX(480), AY(400), AX(481), AY(334));
+  c.bezierCurveTo(AX(482), AY(262), AX(412), AY(248), AX(372), AY(268));
+  c.fill();
+
+  // alpha → signed distance in texels (positive outside)
+  const a = c.getImageData(0, 0, N, N).data, NN = N * N, INF = 1e20;
+  const outer = new Float64Array(NN), inner = new Float64Array(NN);
+  for (let i = 0; i < NN; i++) {
+    const al = a[i * 4 + 3] / 255;
+    outer[i] = al >= 1 ? 0 : al <= 0 ? INF : Math.max(0, 0.5 - al) ** 2;
+    inner[i] = al >= 1 ? INF : al <= 0 ? 0 : Math.max(0, al - 0.5) ** 2;
+  }
+  const f = new Float64Array(N), v = new Uint32Array(N), z = new Float64Array(N + 1);
+  function edt1d(g, off, stride) {
+    for (let q = 0; q < N; q++) f[q] = g[off + q * stride];
+    v[0] = 0; z[0] = -INF; z[1] = INF;
+    for (let q = 1, k = 0, sv = 0; q < N; q++) {
+      do { const r = v[k]; sv = (f[q] - f[r] + q * q - r * r) / (q - r) / 2; } while (sv <= z[k] && --k > -1);
+      k++; v[k] = q; z[k] = sv; z[k + 1] = INF;
+    }
+    for (let q = 0, k = 0; q < N; q++) { while (z[k + 1] < q) k++; const r = v[k], qr = q - r; g[off + q * stride] = f[r] + qr * qr; }
+  }
+  for (const g of [outer, inner]) {
+    for (let x = 0; x < N; x++) edt1d(g, x, N);
+    for (let y = 0; y < N; y++) edt1d(g, y * N, 1);
+  }
+  const sdf = new Float32Array(NN);
+  for (let i = 0; i < NN; i++) sdf[i] = Math.sqrt(outer[i]) - Math.sqrt(inner[i]);
+  SH.sdf = sdf;
+  // outline points, ordered round the centre, so idle probes can pick any spot on the edge
+  const pts = [];
+  for (let y = 0; y < N; y += 2) for (let x = 0; x < N; x += 2) if (Math.abs(sdf[y * N + x]) < 0.9) pts.push([(x + 0.5) / N, (y + 0.5) / N]);
+  pts.sort((p, q) => Math.atan2(p[1] - 0.5, p[0] - 0.5) - Math.atan2(q[1] - 0.5, q[0] - 0.5));
+  SH.contour = pts;
+  SH.core = pts.filter((p) => Math.hypot(p[0] - 0.5, p[1] - 0.5) < 0.22);
+  gl.activeTexture(gl.TEXTURE8);
+  gl.bindTexture(gl.TEXTURE_2D, shapeTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, N, N, 0, gl.RED, gl.FLOAT, sdf);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.activeTexture(gl.TEXTURE0);
+}
+buildSpider();
 
 // ASCII glyph set: every cell picks the glyph whose shape best matches the image inside it, so slopes,
 // edges, hairline strands and corners each find a character that actually looks like them
@@ -1161,9 +1349,11 @@ bool handAt(vec2 fc) {
   }
   return false;
 }
-vec3 ascii(vec2 fc) {
-  if (handAt(fc)) return fxaa(fc);
-  vec2 cid = floor(fc / uCell), o = cid * uCell;
+uniform sampler2D uCellT;   // per-cell glyph choice (r = glyph index, g = ink), written by the cell pass
+// the glyph that best matches one cell. Every pixel of a cell would get the same answer, so this runs once per
+// cell in its own small pass (≈1/100th of the work) instead of in every pixel
+vec2 cellGlyph(vec2 cid) {
+  vec2 o = cid * uCell;
   // the cell's shape vector: left and right column, top / middle / bottom (fragment y runs up, so top is 5/6)
   vec3 L = vec3(inkS(o + uCell * vec2(0.27, 0.833)), inkS(o + uCell * vec2(0.27, 0.5)), inkS(o + uCell * vec2(0.27, 0.167)));
   vec3 R = vec3(inkS(o + uCell * vec2(0.73, 0.833)), inkS(o + uCell * vec2(0.73, 0.5)), inkS(o + uCell * vec2(0.73, 0.167)));
@@ -1182,9 +1372,16 @@ vec3 ascii(vec2 fc) {
     float d = dot(dl, dl) + dot(dr, dr);
     if (d < bd) { bd = d; best = i; }
   }
+  return vec2(float(best), avg);
+}
+vec3 ascii(vec2 fc) {
+  if (handAt(fc)) return fxaa(fc);
+  vec2 cid = floor(fc / uCell);
+  vec2 ga = texelFetch(uCellT, ivec2(cid), 0).rg;
+  float best = floor(ga.r * 255.0 + 0.5), avg = ga.g;
   vec2 lc = fract(fc / uCell);
   // explicit gradients: the cell-local uv jumps at cell seams, which would spike the mip level there
-  float a = textureGrad(uGlyph, vec2((float(best) + lc.x) / NGLYPH, 1.0 - lc.y), vec2(1.0 / (uCell.x * NGLYPH), 0.0), vec2(0.0, 1.0 / uCell.y)).r;
+  float a = textureGrad(uGlyph, vec2((best + lc.x) / NGLYPH, 1.0 - lc.y), vec2(1.0 / (uCell.x * NGLYPH), 0.0), vec2(0.0, 1.0 / uCell.y)).r;
   // glyph brightness follows the tone too (greys only), so faint shadow reads lighter than solid goo
   a *= mix(0.55, 1.0, smoothstep(0.0, 0.5, avg));
   return uDark > 0.5 ? mix(BLACK, WHITE, a) : mix(WHITE, BLACK, a);
@@ -1198,11 +1395,13 @@ vec3 future(vec2 fc) {
   float tear = step(0.975, hash12(vec2(band * 0.37, tick))) * (hash12(vec2(band, tick * 1.7)) - 0.5) * 14.0 * uDpr;
   vec2 f = fc + vec2(tear, 0.0);
   vec3 c = fxaa(f);
-  float split = 1.1 * uDpr;
-  c.r = mix(c.r, texture(uC, (f + vec2(split, 0.0)) / uRes).r, 0.85);
-  c.b = mix(c.b, texture(uC, (f - vec2(split, 0.0)) / uRes).b, 0.85);
+  // the split stays under a pixel so the suit reads blue-black rather than purple; it widens for the
+  // frame a band tears
+  float split = (0.45 + 2.5 * abs(sign(tear))) * uDpr;
+  c.r = mix(c.r, texture(uC, (f + vec2(split, 0.0)) / uRes).r, 0.6);
+  c.b = mix(c.b, texture(uC, (f - vec2(split, 0.0)) / uRes).b, 0.6);
   float scan = 0.5 + 0.5 * cos(fc.y * 6.2832 / (3.0 * uDpr));
-  return c * (1.0 - scan * mix(0.05, 0.11, uDark));
+  return c * (1.0 - scan * mix(0.03, 0.07, uDark));
 }
 // 0 venom and 3 carnage are the studio render (carnage is shaded in pass 2); 4 is 2099's screen
 vec3 look(float m, vec2 fc) { return m < 0.5 || (m > 2.5 && m < 3.5) ? fxaa(fc) : m < 1.5 ? dither(fc) : m < 2.5 ? ascii(fc) : future(fc); }
@@ -1215,6 +1414,12 @@ vec3 switched(vec2 fc) {
 float sdBox(vec2 q, vec2 b) { vec2 d = abs(q) - b; return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0); }
 vec3 lookOf(int i, vec2 fc) { return uLook[i] < 0.0 ? switched(fc) : look(uLook[i], fc); }
 
+#ifdef CELLPASS
+void main() {
+  vec2 g = cellGlyph(floor(gl_FragCoord.xy));
+  outC = vec4(g.x / 255.0, g.y, 0.0, 1.0);
+}
+#else
 void main() {
   vec2 fc = gl_FragCoord.xy;
   // every pixel takes the look of the slab nearest to it, so a slab's tendrils and shadow share its look
@@ -1229,8 +1434,12 @@ void main() {
   float w = (d2 - d1) / 24.0;
   if (w < 1.0 && uLook[i1] != uLook[i2] && bayer8(floor(fc / uDot)) > 0.5 + 0.5 * w) col = lookOf(i2, fc);
   outC = vec4(col, 1.0);
-}`;
-const p3 = program(FRAG_FXAA, ['uC', 'uRes', 'uDpr', 'uTime', 'uGlyph', 'uMode', 'uDot', 'uCell', 'uDark', 'uBodyP', 'uLook', 'uShapeL', 'uShapeR', 'uG']);
+}
+#endif`;
+const p3 = program(FRAG_FXAA, ['uC', 'uRes', 'uDpr', 'uTime', 'uGlyph', 'uMode', 'uDot', 'uCell', 'uDark', 'uBodyP', 'uLook', 'uG', 'uCellT']);
+// the same source compiled as the ASCII cell pass: one fragment per glyph cell
+const pCell = program(FRAG_FXAA.replace('precision highp float;', 'precision highp float;\n#define CELLPASS 1'),
+  ['uC', 'uRes', 'uCell', 'uDark', 'uTime', 'uShapeL', 'uShapeR']);
 
 // glyph atlas for the ASCII look: one tile per character, white on black
 const GLYPH_W = 56, GLYPH_H = 96;
@@ -1274,6 +1483,9 @@ const fx = { carnage: 0, future: 0 };  // how far each look has eased in (0..1);
 const theme = { dark: false, d: 0 };   // d eases toward dark so the studio fades between the two
 let cTex = null;
 const cFbo = gl.createFramebuffer();
+let cellTex = null, CW = 1, CH = 1;
+const cellFbo = gl.createFramebuffer();
+const CELL_CSS = [4, 7];   // ascii glyph cell, css px
 
 let gTex = null;
 const fbo = gl.createFramebuffer();
@@ -1299,6 +1511,15 @@ function makeGBuffer() {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.bindFramebuffer(gl.FRAMEBUFFER, cFbo);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, cTex, 0);
+  if (cellTex) gl.deleteTexture(cellTex);
+  CW = Math.ceil(W / (CELL_CSS[0] * DPR)); CH = Math.ceil(H / (CELL_CSS[1] * DPR));
+  cellTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, cellTex);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, CW, CH);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, cellFbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, cellTex, 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
 
@@ -1400,8 +1621,30 @@ function geo(b = btn) {
     z: Math.max(2, top - 4) + b.lift * LIFT_H, // where strands leave the surface
   };
 }
+// the spider's field, bilinear, in texel coordinates
+function sdfAt(tu, tv) {
+  const N = SHAPE_N, u = clamp(tu, 0, N - 1.001), v = clamp(tv, 0, N - 1.001);
+  const x0 = Math.floor(u), y0 = Math.floor(v), fx2 = u - x0, fy2 = v - y0, s = SH.sdf, i = y0 * N + x0;
+  return (s[i] * (1 - fx2) + s[i + 1] * fx2) * (1 - fy2) + (s[i + N] * (1 - fx2) + s[i + N + 1] * fx2) * fy2;
+}
+// nearest point on the spider's outline, outward normal and signed distance, like pillEdge. Legs are thin,
+// so roots sink in only a little (a deep inset would push them out through the far side of a leg)
+function spiderEdge(x, y, g, inset) {
+  const N = SHAPE_N, qx = x - g.cx, qy = y - g.cy;
+  const kx = clamp(qx, -g.hw, g.hw), ky = clamp(qy, -g.hh, g.hh), out = Math.hypot(qx - kx, qy - ky);
+  const tu = (kx / (2 * g.hw) + 0.5) * N - 0.5, tv = (ky / (2 * g.hh) + 0.5) * N - 0.5;
+  const pxT = (g.hw + g.hh) / N;
+  const d = sdfAt(tu, tv) * pxT + out;
+  let nx = sdfAt(tu + 1, tv) - sdfAt(tu - 1, tv), ny = sdfAt(tu, tv + 1) - sdfAt(tu, tv - 1);
+  let L = Math.hypot(nx, ny);
+  if (L < 1e-4) { nx = qx; ny = qy; L = Math.hypot(nx, ny) || 1; }
+  nx /= L; ny /= L;
+  const k = d + inset * 0.3;
+  return { x: x - nx * k, y: y - ny * k, nx, ny, d };
+}
 // nearest point on the rounded-rectangle boundary (optionally inset), outward normal, signed distance
 function pillEdge(x, y, g, inset = 0) {
+  if (shape.spider && SH.sdf) return spiderEdge(x, y, g, inset);
   const r = g.r, ax = g.hw - r, ay = g.hh - r;
   const qx = x - g.cx, qy = y - g.cy;
   const kx = clamp(qx, -ax, ax), ky = clamp(qy, -ay, ay); // nearest point on the inner (corner-centre) box
@@ -1427,6 +1670,10 @@ function bodyAt(x, y) {
   return -1;
 }
 function anchorFor(px, py, lat, g) {
+  if (shape.spider && SH.sdf) { // webs root on the spider's body, facing the cursor, not out on the leg tips
+    const dx = px - g.cx, dy = py - g.cy, L = Math.hypot(dx, dy) || 1, r = 0.2 * g.hw;
+    px = g.cx + (dx / L) * r; py = g.cy + (dy / L) * r;
+  }
   const e = pillEdge(px, py, g);
   return pillEdge(e.x - e.ny * lat - e.nx * 4, e.y + e.nx * lat - e.ny * 4, g, 10);
 }
@@ -1528,6 +1775,10 @@ function spawnMicro(g) {
 // edge, glides along the contour in one direction, and sinks back in like a passing wave
 // a point on the pill outline at fraction t (0..1) of its perimeter, so every part of the edge is equally likely
 function outlineAt(t, g) {
+  if (shape.spider && SH.core.length) {
+    const p = SH.core[Math.floor((((t % 1) + 1) % 1) * SH.core.length)];
+    return pillEdge(g.cx + (p[0] - 0.5) * 2 * g.hw, g.cy + (p[1] - 0.5) * 2 * g.hh, g);
+  }
   const ax = g.hw - g.r, ay = g.hh - g.r, arc = (Math.PI / 2) * g.r;
   const per = 4 * ax + 4 * ay + 4 * arc;
   let s = (((t % 1) + 1) % 1) * per;
@@ -1984,7 +2235,8 @@ function stepBodies(dt) {
 }
 
 // effective physics for the current look. Carnage drives the goo harder: more tendrils, a faster lunge,
-// more writhing, thinner tips, a longer reach. Every other look uses the tuned values as they are
+// more writhing, thinner tips, a longer reach; 2099 only thins the tips into talons. Every other look
+// uses the tuned values as they are
 const E = { whip: 1, slither: 1, magnet: 1, maxStrands: 6, reach: 120, thickness: 1, micro: 9 };
 function effective() {
   const f = fx.carnage;
@@ -1993,7 +2245,7 @@ function effective() {
   E.magnet = P.magnet * (1 + 0.5 * f);
   E.maxStrands = Math.min(7, Math.round(P.maxStrands + 1.6 * f));
   E.reach = P.reach * (1 + 0.3 * f);
-  E.thickness = P.thickness * (1 - 0.14 * f);
+  E.thickness = P.thickness * (1 - 0.14 * f) * (1 - 0.1 * fx.future);
   E.micro = 9 + 4 * f;
 }
 
@@ -2251,6 +2503,9 @@ function render() {
   gl.uniform1f(u1.uZTop, zTop);
   gl.uniform3f(u1.uK, K[0], K[1], K[2]);
   gl.uniform1i(u1.uLabel, 1);
+  gl.uniform1i(u1.uShapeSDF, 8);
+  gl.uniform1f(u1.uSpider, shape.v);
+  gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, shapeTex);
   gl.uniform1i(u1.uNC, nc);
   gl.uniform4fv(u1.uCoil, coilBuf);
   gl.uniform4fv(u1.uCBox, cboxBuf);
@@ -2275,6 +2530,8 @@ function render() {
   const u2 = p2.u;
   gl.uniform1i(u2.uG, 0);
   gl.uniform1i(u2.uLabel, 1);
+  gl.uniform1i(u2.uShapeSDF, 8);
+  gl.uniform1f(u2.uSpider, shape.v);
   gl.uniform2f(u2.uRes, W, H);
   gl.uniform1f(u2.uDpr, DPR);
   gl.uniform1f(u2.uTime, time2);
@@ -2298,18 +2555,36 @@ function render() {
   gl.uniform1f(u2.uMorph, hand.m);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 
+  const cell = [CELL_CSS[0] * DPR, CELL_CSS[1] * DPR];
+  gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, cTex);
+  // ascii cell pass: one fragment per glyph cell picks its glyph, only while ascii is (or is dissolving) on screen
+  if (mode.to === 2 || (mode.from === 2 && mode.t < 1) || LOOKS.includes(2)) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, cellFbo);
+    gl.viewport(0, 0, CW, CH);
+    gl.useProgram(pCell.prog);
+    gl.uniform1i(pCell.u.uC, 4);
+    gl.uniform2f(pCell.u.uRes, W, H);
+    gl.uniform2f(pCell.u.uCell, cell[0], cell[1]);
+    gl.uniform1f(pCell.u.uDark, theme.d);
+    gl.uniform1f(pCell.u.uTime, time2);
+    gl.uniform3fv(pCell.u.uShapeL, shapeL);
+    gl.uniform3fv(pCell.u.uShapeR, shapeR);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
   // pass 3: the look (FXAA / dither / ascii) to the screen
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
   gl.useProgram(p3.prog);
   gl.uniform1i(p3.u.uC, 4);
   gl.uniform2f(p3.u.uRes, W, H);
   gl.uniform3f(p3.u.uMode, mode.from, mode.to, mode.t);
   gl.uniform1f(p3.u.uDark, theme.d);
   gl.uniform1f(p3.u.uDot, Math.max(1, Math.round(1.5 * DPR)));   // ~1.5 css px dots
-  gl.uniform2f(p3.u.uCell, 4 * DPR, 7 * DPR);                   // 4×7 css px glyph cells
-  gl.uniform3fv(p3.u.uShapeL, shapeL);
-  gl.uniform3fv(p3.u.uShapeR, shapeR);
+  gl.uniform2f(p3.u.uCell, cell[0], cell[1]);
   gl.uniform1i(p3.u.uG, 0);   // gTex is still bound to unit 0 from pass 2
+  gl.uniform1i(p3.u.uCellT, 8);
+  gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, cellTex);
   gl.uniform1f(p3.u.uDpr, DPR);
   gl.uniform1f(p3.u.uTime, time2);
   gl.uniform4fv(p3.u.uBodyP, bodyBuf);
@@ -2326,14 +2601,32 @@ function layoutButton() {
   // first layout: the button in the middle, the two nodes off to either side (they are free after that)
   const spots = [[0, 0]]; // one slab, dead centre
   for (const b of bodies) {
+    if (b.hh0 === undefined) b.hh0 = b.hh;
     const sc = b.logo ? LOGO_CSS / (LABEL_H * 0.86) : LABEL_CSS / LABEL_PX;
     if (!b.placed) { b.cx = vw / 2 + spots[b.i][0]; b.cy = vh / 2 + spots[b.i][1]; b.placed = true; }
-    // the slab hugs the word: its corners begin just past the first and last letters
-    b.hw = Math.max(b.hh, ((b.inkW || 260) * sc) / 2 + 28); // 28px past the mark's edges, never narrower than square
-    b.lbw = (LABEL_W * sc) / 2;
-    b.lbh = (LABEL_H * sc) / 2;
+    // square: the slab hugs the mark, 28px past its edges, never narrower than square
+    b.sqHw = Math.max(b.hh0, ((b.inkW || 260) * sc) / 2 + 28);
+    b.sqLbw = (LABEL_W * sc) / 2;
+    b.sqLbh = (LABEL_H * sc) / 2;
+    // spider: compact, but still big enough to read every leg, with the logo filling the abdomen where the 4 was
+    b.spS = clamp(Math.min(vw, vh) * 0.42, 220, 360);
+    const scS = (0.22 * b.spS) / (LABEL_H * 0.86);
+    b.spLbw = (LABEL_W * scS) / 2;
+    b.spLbh = (LABEL_H * scS) / 2;
   }
+  sizeBodies();
   syncHit();
+}
+function sizeBodies() {
+  const v = shape.v;
+  for (const b of bodies) {
+    if (b.sqHw === undefined) continue;
+    const half = b.spS / 2;
+    b.hw = b.sqHw + (half - b.sqHw) * v;
+    b.hh = b.hh0 + (half - b.hh0) * v;
+    b.lbw = b.sqLbw + (b.spLbw - b.sqLbw) * v;
+    b.lbh = b.sqLbh + (b.spLbh - b.sqLbh) * v;
+  }
 }
 // the real <button> follows the slab around, so focus, clicks and screen readers stay exact
 function syncHit() {
@@ -2354,7 +2647,8 @@ function resize() {
   DPR = W / viewW(); // device pixels per virtual px: the scale-up happens here
   makeGBuffer();
 }
-addEventListener('resize', resize);
+// resizing the canvas clears it, so draw straight away: otherwise the browser shows one blank frame
+addEventListener('resize', () => { resize(); render(); });
 resize();
 
 // ── frame pacing. The goal is to hold the display's own refresh rate (60, 90 or 120 Hz), not a fixed 40.
@@ -2400,6 +2694,8 @@ function frame(now) {
   const k = reduced ? 1 : 1 - Math.exp(-dt * 7);
   fx.carnage += ((mode.to === 3 ? 1 : 0) - fx.carnage) * k;
   fx.future += ((mode.to === 4 ? 1 : 0) - fx.future) * k;
+  const sv = (shape.spider ? 1 : 0) - shape.v;
+  if (Math.abs(sv) > 1e-4) { shape.v = Math.abs(sv) < 2e-3 ? (shape.spider ? 1 : 0) : shape.v + sv * (reduced ? 1 : 1 - Math.exp(-dt * 6)); sizeBodies(); }
   // the OS cursor hides while the rendered 3D hand stands in for it
   if (hand.on !== document.body.classList.contains('is-engaged')) document.body.classList.toggle('is-engaged', hand.on);
   gpuBegin();
@@ -2409,24 +2705,19 @@ function frame(now) {
   // refresh rate: the shortest interval seen over the last two seconds, snapped to the common rates
   if (dt > 0.003 && dt < pace.minDt) pace.minDt = dt;
   if ((pace.win += dt) > 2) { const hz = 1 / pace.minDt; pace.refresh = 1 / (hz > 100 ? 120 : hz > 75 ? 90 : 60); pace.win = 0; pace.minDt = 1; }
-  // load: the share of one frame's budget that is spent. With a GPU timer this is exact; without it the
-  // frame interval can only show overrun (vsync hides headroom), so raises are tried more cautiously
+  // resolution is chosen once and then held. Every change reallocates all the buffers, which is itself a
+  // visible hitch, so it only ever steps down, after 3 s of clearly missed frames (not ordinary vsync jitter),
+  // at most once every 20 s, and never climbs back up by itself. The first 2 s are ignored: shaders warm up
   const visible = document.visibilityState === 'visible' && dt < 0.09;
   const load = (pace.gpuKnown ? pace.gpuEma : frameEma) / pace.refresh;
-  const over = pace.gpuKnown ? 0.82 : 1.15, under = pace.gpuKnown ? 0.5 : 1.04;
+  const over = pace.gpuKnown ? 0.92 : 1.4;
   pace.cool = Math.max(0, pace.cool - dt);
-  pace.slow = visible && load > over ? pace.slow + dt : 0;
-  pace.fast = visible && load < under && quality < 1 ? pace.fast + dt : 0;
-  if (pace.slow > 0.4 && quality > 0.6) {
+  pace.slow = visible && now > 2000 && load > over ? pace.slow + dt : Math.max(0, pace.slow - dt * 0.5);
+  if (pace.slow > 3 && pace.cool <= 0 && quality > 0.6) {
     quality = Math.max(0.6, Math.round((quality - 0.1) * 10) / 10);
-    pace.slow = 0;
-    // a raise that had to be undone right away: hold this level for a good while before trying again
-    pace.cool = now - pace.lastRaise < 4000 ? 45 : 5;
+    pace.slow = 0; pace.cool = 20;
     resize();
-  } else if (pace.fast > (pace.gpuKnown ? 2 : 6) && pace.cool <= 0) {
-    quality = Math.min(1, Math.round((quality + 0.1) * 10) / 10);
-    pace.fast = 0; pace.cool = 3; pace.lastRaise = now;
-    resize();
+    render(); // draw into the fresh canvas this frame, so the change never shows as a blank frame
   }
   if ((fpsShown += dt) > 0.5) {
     fpsShown = 0;
@@ -2523,6 +2814,25 @@ try {
 } catch {}
 
 // ───────────────────────────── theme ─────────────────────────────
+const shapeBtn = document.getElementById('shapeBtn');
+function setShape(spider, save = true) {
+  shape.spider = spider;
+  shapeBtn.firstChild.textContent = spider ? 'Square' : 'Spider';
+  shapeBtn.setAttribute('aria-label', spider ? 'Show the square slab' : 'Show the spider');
+  if (save) try { localStorage.setItem('venom-shape', spider ? 'spider' : 'square'); } catch {}
+}
+shapeBtn.addEventListener('click', () => setShape(!shape.spider));
+addEventListener('keydown', (e) => {
+  if ((e.key === 's' || e.key === 'S') && !e.metaKey && !e.ctrlKey && !(e.target instanceof HTMLInputElement)) setShape(!shape.spider);
+});
+{
+  let s = new URLSearchParams(location.search).get('shape');
+  try { s = s || localStorage.getItem('venom-shape'); } catch {}
+  setShape(s !== 'square', false);
+  shape.v = shape.spider ? 1 : 0;
+  sizeBodies();
+}
+
 const themeBtn = document.getElementById('themeBtn');
 function setTheme(dark, save = true) {
   theme.dark = dark;
@@ -2617,7 +2927,7 @@ addEventListener('keydown', (e) => {
   if ((e.key === 't' || e.key === 'T') && !e.metaKey && !e.ctrlKey && !(e.target instanceof HTMLInputElement)) togglePanel();
 });
 
-window.VenomButton = { setLabel, setMode, setTheme, params: P, element: hitEl, bodies, modes: MODE_NAMES, _debug: {
+window.VenomButton = { setLabel, setMode, setTheme, setShape, params: P, element: hitEl, bodies, modes: MODE_NAMES, _debug: {
   fx, pace,
   strands, crawlers, hand, cur, btn, drag,
   // deterministic stepping for automated previews where rAF is throttled
