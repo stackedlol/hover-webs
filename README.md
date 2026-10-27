@@ -27,16 +27,12 @@
 
 # Phantom
 
-A slab of goo that reaches for your cursor. One HTML file, raw WebGL2, no build step.
-
-- **One slab**: the Andrew Hunter mark on a 184px box, centre screen. Drag or throw it.
-- **Looks**: Venom, Dither, ASCII (`M`). Dither by default.
-- **Themes**: light and dark (`D`). Black and white only.
+basically spiderman stuff
 
 ## Run
 
 ```sh
-python3 -m http.server 3002   # → http://localhost:3002
+python3 -m http.server 3000   # → http://localhost:3000
 ```
 
 [Tuning](docs/03-anatomy.md) (`T`) · [How it works](docs/04-how-it-works.md) · [Art](art/)

@@ -272,7 +272,7 @@ function makeBody(i, label, hh, delay) {
     lift: 0, liftV: 0, press: 0, pressV: 0, pressTarget: 0, intro: reduced ? 1 : 0, introV: 0, delay, placed: false };
 }
 const bodies = BODY_SCALE.map((k, i) => Object.assign(makeBody(i, LABEL_TEXT, 92 * k, 0.25 * i), { k }));
-// the slab's outline: the logo mark grown into a straight-edged slab, as a signed distance field over the
+// the slab's outline: the logo mark grown into a soft-cornered slab, as a signed distance field over the
 // slab's box, shared by the ray march, the floor shadow and the goo physics
 const SHAPE_N = 640;                    // texels across the slab's field
 const LG = { sdf: null, contour: [] };  // CPU copy of the field (texels) + outline points
@@ -1018,19 +1018,21 @@ vec3 shadeGoo(vec2 p, vec4 g) {
                + win * matte * 0.25 * vec3(0.5, 0.65, 1.0);
     vec3 glow = redA * 0.3 * uDark * redM + vec3(2.2, 0.12, 0.08) * pulseF * mix(0.7, 1.0, uDark);
     vec3 holo = vec3(0.15, 0.7, 1.0) * pow(1.0 - NdV, 3.0) * 0.6 * web * (1.0 - seam * 0.5);
-    // circuit web: a spider's web drawn as hard geometry under the knit, straight spokes from the slab's
-    // middle and octagonal rings spaced wider as they go out, every strand a crisp trace. A current pulses
-    // outward through it, a hot white-red core in a red bloom
+    // the web under the knit: a loose, organic orb web, not a grid. Nine spokes that bow gently as they go
+    // out, and a few rings spaced wider and wider, each sagging toward the hub between spokes and wavering
+    // a little along its length, like silk. A current pulses outward through it, a hot white-red core in a red bloom
     vec2 wq = p - bp.xy;
-    float wr = length(wq), sect = 0.7854;                          // eight spokes
-    float wa = mod(atan(wq.y, wq.x) + 0.3927, sect) - 0.3927;      // angle from the middle of this sector
-    float apo = cos(0.3927);
-    float wu = wr * cos(wa) / apo;                                 // radius measured round the octagon
-    float rk = 16.0 * pow(1.36, floor(log(max(wu, 1.0) / 16.0) / log(1.36) + 0.5));
-    float dRing = abs(wu - rk) * apo;
-    float dSpoke = wr * sin(0.3927 - abs(wa));
+    float wr = length(wq);
+    float wth = atan(wq.y, wq.x) + (vn(vec2(wr * 0.012, 3.0)) - 0.5) * 0.35;  // spokes bow as they go out
+    float sk = (wth / 6.2832 + 0.5) * 9.0, sid = floor(sk);
+    float sf = sk - sid - 0.5 - (hash12(vec2(sid, 1.7)) - 0.5) * 0.25;      // each spoke slightly off even
+    float dSpoke = abs(sf) * 6.2832 / 9.0 * wr;
+    float sag = 10.0 * (0.5 - 0.5 * cos(sf * 6.2832)) * smoothstep(20.0, 80.0, wr);
+    float wu = wr + sag + (vn(vec2(wth * 4.0, wr * 0.03)) - 0.5) * 5.0;
+    float kf = log(max(wu, 1.0) / 26.0) / log(1.6), kr = floor(kf + 0.5);
+    float dRing = abs(wu - 26.0 * pow(1.6, kr)) + step(kr, -0.5) * 1e3;
     float vf = wu / 120.0;
-    float vd = min(dRing, dSpoke) * uDpr * smoothstep(6.0, 18.0, wr) + (1.0 - smoothstep(6.0, 18.0, wr)) * 1e3;
+    float vd = min(dRing, dSpoke) * uDpr * smoothstep(8.0, 22.0, wr) + (1.0 - smoothstep(8.0, 22.0, wr)) * 1e3;
     float core = 1.0 - smoothstep(0.4, 1.4, vd), bloom = exp(-vd * 0.22);
     float ph = fract(uTime * 0.42 - length(p - bp.xy) * 0.0045 + vn(p * 0.01) * 0.35);
     float pulse = smoothstep(0.0, 0.06, ph) * (1.0 - smoothstep(0.06, 0.42, ph));
@@ -1277,8 +1279,8 @@ function uploadField(tex, unit, sdf, N) {
   gl.activeTexture(gl.TEXTURE0);
 }
 
-// ── the logo slab: the mark, inflated and with its inside corners filled (a morphological closing), then
-// straightened, so the slab reads as a fat, hard-edged "A" with the stamp filling most of it
+// ── the logo slab: the mark, inflated and with its inside corners filled (a morphological closing), so the
+// slab reads as a fat, soft-cornered "A" with the stamp filling most of it
 const logoShapeTex = gl.createTexture();
 function buildLogoShape(img) {
   const N = SHAPE_N, cv = document.createElement('canvas');
@@ -1292,123 +1294,11 @@ function buildLogoShape(img) {
   for (let i = 0; i < N * N; i++) grown[i] = Math.round(255 * clamp(0.5 - (mark[i] - PAD - R), 0, 1));
   const soft = alphaToSdf(grown, 1, N);
   for (let i = 0; i < N * N; i++) soft[i] += R;  // shrink back by R: convex corners keep PAD, concave ones round off
-  // the grow and the closing round every corner; trace that outline as a polygon and miter the arcs back
-  // into sharp corners, so the slab keeps the mark's straight edges and the goo has crisp sides to leave from
-  const sdf = straightEdged(soft, N);
+  const sdf = soft;  // the grow and the closing leave every corner softly rounded
   LG.sdf = sdf;
   LG.contour = contourOf(sdf, N);
   uploadField(logoShapeTex, 9, sdf, N);
   layoutButton();
-}
-
-// a field's outline as straight edges: trace each loop of the inside along pixel edges, simplify it
-// (Douglas–Peucker), then collapse every run of short segments (what is left of an arc) into the corner where
-// the long edges either side of it meet. Rasterised again and turned back into a field
-function straightEdged(sdf, N) {
-  const ins = (x, y) => x >= 0 && y >= 0 && x < N && y < N && sdf[y * N + x] < 0;
-  const next = new Map(), key = (x, y) => y * (N + 1) + x;
-  const add = (ax, ay, bx, by) => { const k = key(ax, ay); (next.get(k) || next.set(k, []).get(k)).push([bx, by]); };
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-    if (!ins(x, y)) continue;   // clockwise round each inside pixel (y down), only where it borders the outside
-    if (!ins(x, y - 1)) add(x, y, x + 1, y);
-    if (!ins(x + 1, y)) add(x + 1, y, x + 1, y + 1);
-    if (!ins(x, y + 1)) add(x + 1, y + 1, x, y + 1);
-    if (!ins(x - 1, y)) add(x, y + 1, x, y);
-  }
-  const loops = [];
-  for (const [k0, outs] of next) {
-    while (outs.length) {
-      const loop = [[k0 % (N + 1), Math.floor(k0 / (N + 1))]];
-      let p = outs.pop();
-      while (p) {
-        const k = key(p[0], p[1]);
-        if (k === k0) break;
-        loop.push(p);
-        const o = next.get(k);
-        p = o && o.length ? o.pop() : null;
-      }
-      if (loop.length > 24) loops.push(loop);
-    }
-  }
-  const TOL = 4, LMIN = N * 0.07;
-  function dp(pts, a, b, keep) {
-    const [ax, ay] = pts[a], [bx, by] = pts[b], L = Math.hypot(bx - ax, by - ay) || 1;
-    let best = -1, bd = TOL;
-    for (let i = a + 1; i < b; i++) {
-      const d = Math.abs((bx - ax) * (ay - pts[i][1]) - (ax - pts[i][0]) * (by - ay)) / L;
-      if (d > bd) { bd = d; best = i; }
-    }
-    if (best < 0) return;
-    dp(pts, a, best, keep); keep[best] = 1; dp(pts, best, b, keep);
-  }
-  // the run R (from the end of edge a0→a1 to the start of edge b0→b1) as sharp corners: one miter if R is a
-  // real fillet (it all sits inside the corner the two edges make), a square cap if the edges are parallel
-  // (a bar's end), otherwise split at R's longest segment and miter each half against it
-  const cross = (u, v, q) => (v[0] - u[0]) * (q[1] - u[1]) - (v[1] - u[1]) * (q[0] - u[0]);
-  function miter(a0, a1, R, b0, b1) {
-    if (R.length < 2) return R;
-    const dax = a1[0] - a0[0], day = a1[1] - a0[1], dbx = b1[0] - b0[0], dby = b1[1] - b0[1];
-    const den = dax * dby - day * dbx, la = Math.hypot(dax, day), lb = Math.hypot(dbx, dby);
-    const r0 = R[0], r1 = R[R.length - 1];
-    if (Math.abs(den) > 0.05 * la * lb) {
-      const t = ((b0[0] - a0[0]) * dby - (b0[1] - a0[1]) * dbx) / den, X = [a0[0] + dax * t, a0[1] + day * t];
-      const tri = [r0, X, r1], sg = Math.sign(cross(r0, X, r1));
-      let ok = sg !== 0 && t > 0.5 && Math.hypot(X[0] - r0[0], X[1] - r0[1]) < Math.max(LMIN, 0.6 * la);
-      for (let k = 1; k < R.length - 1 && ok; k++) for (let e = 0; e < 3 && ok; e++) {
-        const u = tri[e], v = tri[(e + 1) % 3];
-        if ((sg * cross(u, v, R[k])) / (Math.hypot(v[0] - u[0], v[1] - u[1]) || 1) < -1.5) ok = false;
-      }
-      if (ok) return [X];
-    } else {
-      const cx = r1[0] - r0[0], cy = r1[1] - r0[1], cl = Math.hypot(cx, cy) || 1, ox = cy / cl, oy = -cx / cl;
-      let far = 0;
-      for (const q of R) far = Math.max(far, (q[0] - r0[0]) * ox + (q[1] - r0[1]) * oy);
-      return [r0, [r0[0] + ox * far, r0[1] + oy * far], [r1[0] + ox * far, r1[1] + oy * far], r1];
-    }
-    if (R.length === 2) return R;   // one short side between two edges that will not meet: keep it as a bevel
-    let m = 0, ml = -1;
-    for (let k = 0; k < R.length - 1; k++) {
-      const l = Math.hypot(R[k + 1][0] - R[k][0], R[k + 1][1] - R[k][1]);
-      if (l > ml) { ml = l; m = k; }
-    }
-    return [...miter(a0, a1, R.slice(0, m + 1), R[m], R[m + 1]), ...miter(R[m], R[m + 1], R.slice(m + 1), b0, b1)];
-  }
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = N;
-  const c = cv.getContext('2d');
-  c.fillStyle = '#fff';
-  c.beginPath();
-  for (const loop of loops) {
-    let far = 0, fd = 0;
-    for (let i = 1; i < loop.length; i++) {
-      const d = Math.hypot(loop[i][0] - loop[0][0], loop[i][1] - loop[0][1]);
-      if (d > fd) { fd = d; far = i; }
-    }
-    const pts = loop.concat([loop[0]]), keep = new Uint8Array(pts.length);
-    keep[0] = keep[far] = 1;
-    dp(pts, 0, far, keep); dp(pts, far, pts.length - 1, keep);
-    let poly = loop.filter((_, i) => keep[i]);
-    const n = poly.length, segL = (i) => Math.hypot(poly[(i + 1) % n][0] - poly[i][0], poly[(i + 1) % n][1] - poly[i][1]);
-    const start = [...Array(n).keys()].find((i) => segL(i) >= LMIN);
-    if (start !== undefined) {
-      poly = poly.slice(start).concat(poly.slice(0, start));   // begin on a long edge
-      const out = [];
-      let i = 0;
-      while (i < n) {
-        let j = i + 1;
-        while (j < n && segL(j) < LMIN) j++;
-        const R = [];   // from the end of long edge i to the start of the next long edge
-        for (let k = i + 1; k <= j; k++) R.push(poly[k % n]);
-        out.push(...miter(poly[i], poly[(i + 1) % n], R, poly[j % n], poly[(j + 1) % n]));
-        i = j;
-      }
-      poly = out;
-    }
-    poly.forEach(([x, y], k) => (k ? c.lineTo(x, y) : c.moveTo(x, y)));
-    c.closePath();
-  }
-  c.fill('evenodd');
-  return alphaToSdf(c.getImageData(0, 0, N, N).data, 4, N);
 }
 
 // ASCII glyph set: every cell picks the glyph whose shape best matches the image inside it, so slopes,
@@ -2034,12 +1924,24 @@ function resample(src, a, b) {
   return out;
 }
 
-// pinch-off at the neck: the base whips back into the surface, the tip half recoils into its wrap and unwinds
+// let a strand go as one piece: it recoils whole into the slab from its free end, no fragments left behind
+function letGo(s) {
+  s.state = 'recoil'; s.kind = 'piece'; s.pinch = 0; s.retract = 0; s.r0 = undefined;
+}
+// pinch-off at the neck: the base whips back into the surface, the tip half recoils into its wrap and unwinds.
+// With nothing wound round the hand there is no tip half to keep, so the whole strand goes back as one
 function split(s, g) {
+  if (!s.wrap && s.kind !== 'link') {
+    letGo(s);
+    addRipple(g.cx + s.lx * g.hw, g.cy + s.ly * g.hh, 0.8);
+    lastSnap = time;
+    for (const o of strands) if (o !== s && !o.dead) releaseOne(o);
+    return;
+  }
   const k = s.neckS * (NP - 1);
-  const base = { ...s, kind: 'piece', state: 'recoil', pin: 'anchor', pinch: 0, mound: s.mound, wrap: null,
+  const base = { ...s, kind: 'piece', state: 'recoil', pin: 'anchor', pinch: 0, mound: s.mound, wrap: null, r0: undefined,
     pos: resample(s.pos, 0, k), prev: resample(s.prev, 0, k), rad: new Float32Array(NP), vol: s.vol * s.neckS };
-  const tip = { ...s, kind: 'piece', state: 'recoil', pin: 'cursor', pinch: 0, mound: 0,
+  const tip = { ...s, kind: 'piece', state: 'recoil', pin: 'cursor', pinch: 0, mound: 0, r0: undefined,
     pos: resample(s.pos, NP - 1, k), prev: resample(s.prev, NP - 1, k), rad: new Float32Array(NP), vol: s.vol * (1 - s.neckS) };
   if (s.kind === 'link') { // a bridge snaps into two stubs, each sinking back into its own slab
     Object.assign(tip, { pin: 'anchor', body: s.body2, lx: s.lx2, ly: s.ly2, wrap: null });
@@ -2055,23 +1957,18 @@ function split(s, g) {
   if (s.kind === 'link') { const g2 = G[s.body2]; addRipple(g2.cx + s.lx2 * g2.hw, g2.cy + s.ly2 * g2.hh, 0.8); }
   else {
     lastSnap = time;
-    // one strand going takes the web with it: stretched neighbours neck and part a beat later (staggered, so it
-    // reads as a ripple of snaps, not one cut), and the little surface strings sink back instead of lingering
-    for (const o of strands) {
-      if (o === s || o.dead) continue;
-      if (o.kind === 'reach' && o.state === 'attached' && !o.pinch && (o.stretch > 1.12 || retreatNow)) o.pinch = -rand(0.4, 1.4);
-      else if (o.kind === 'micro' && o.state !== 'recoil' && (retreatNow || awareNow < 0.45)) o.state = 'recoil';
-    }
+    for (const o of strands) if (o !== s && !o.dead) releaseOne(o);
   }
 }
+// one strand going takes the web with it: stretched neighbours let go whole in the same beat (each necking and
+// splitting on its own clock is what scattered the web into little pieces), and the surface strings sink back
+function releaseOne(o) {
+  if (o.kind === 'reach' && o.state === 'attached' && (o.stretch > 1.12 || retreatNow)) letGo(o);
+  else if (o.kind === 'micro' && o.state !== 'recoil' && (retreatNow || awareNow < 0.45)) o.state = 'recoil';
+}
 
-function releaseAll(absorb) {
-  for (const s of strands) {
-    if ((s.kind === 'reach') && (s.state === 'grow' || s.state === 'attached')) {
-      if (absorb || s.state === 'grow') { s.state = 'recoil'; s.kind = 'piece'; }
-      else if (!s.pinch) s.pinch = 1e-4;
-    }
-  }
+function releaseAll() {
+  for (const s of strands) if (s.kind === 'reach' && (s.state === 'grow' || s.state === 'attached')) letGo(s);
 }
 
 function stepStrand(s, dt, g, present, inside) {
@@ -2254,29 +2151,32 @@ function stepStrand(s, dt, g, present, inside) {
     }
   }
 
-  // ── thickness: volume conservation, necking, Rayleigh–Plateau beads (~9 radii apart)
+  // ── thickness: volume conservation and necking. A pulled strand thins smoothly toward its neck instead of
+  // beading, and once it lets go it never fattens: the pieces whip back as tapering threads, not blobs
   let L = 0;
   for (let i = 0; i < NP - 1; i++) {
     const a = i * 3, b = a + 3;
     L += Math.hypot(pos[b] - pos[a], pos[b + 1] - pos[a + 1], pos[b + 2] - pos[a + 2]);
   }
   s.len = L;
-  const rMean = clamp(Math.sqrt(s.vol / (Math.PI * Math.max(L, 2))), 0.55, s.state === 'recoil' ? 5 : 7.5) * E.thickness;
+  let rMean = clamp(Math.sqrt(s.vol / (Math.PI * Math.max(L, 2))), 0.55, 7.5) * E.thickness;
+  if (s.state === 'recoil') {
+    if (s.r0 === undefined) s.r0 = rMean;   // the thickness it let go at: shortening must not swell it
+    rMean = Math.min(rMean, s.r0) * (1 - 0.5 * Math.min(1, s.retract * 2.5));
+  }
   const held = s.state === 'attached';
   const neck = held ? clamp((s.stretch - 1.15) / 1.2, 0, 0.7) : 0;
   const pn = Math.max(0, s.pinch), nk = neck * (1 - pn) + pn * 0.96;
-  const bead = held ? clamp((s.stretch - 1.5) / 0.8, 0, 1) : 0;
-  const beadFreq = L / (9 * Math.max(rMean, 0.6));
-  const capGrow = s.state === 'recoil' ? Math.min(0.8, s.retract * 3) : 0;
+  const recoil = s.state === 'recoil';
   for (let i = 0; i < NP; i++) {
     const sp = i / (NP - 1);
     // thick where it leaves the body; reaching tendrils thin out into the fine wrap filament
     let r = rMean * (s.pin === 'cursor' ? 0.6 : 1 + 0.55 * Math.exp(-sp / 0.08));
     if ((s.wrap && s.kind === 'reach') || s.kind === 'micro' || s.kind === 'probe') r *= 1 - 0.62 * ease(0.5, 1, sp);
-    else r *= 1 + (0.5 + capGrow) * Math.exp(-(1 - sp) / 0.07);
+    else if (recoil) r *= 1 - 0.75 * ease(0.55, 1, sp);   // the snapped end draws out to a point
+    else r *= 1 + 0.5 * Math.exp(-(1 - sp) / 0.07);
     r *= 1 - nk * Math.exp(-(((sp - s.neckS) / 0.16) ** 2));
-    r *= 1 + bead * 0.3 * Math.sin(sp * Math.PI * 2 * beadFreq + s.phase);
-    s.rad[i] = Math.max(r, 0.35);
+    s.rad[i] = Math.max(r, pn > 0 || recoil ? 0.4 : 0.6);  // under a pixel wide a strand renders as dashes
   }
 
   // surface tent where the strand leaves the goo, stretched along the pull direction
@@ -2442,8 +2342,7 @@ function step(dt) {
 
   if (!reduced) {
     const active = strands.filter((s) => s.kind === 'reach' && (s.state === 'grow' || s.state === 'attached')).length;
-    if (!present) releaseAll(false);
-    else if (inside) releaseAll(true);
+    if (!present || inside) releaseAll();
     else {
       const want = e.d < E.reach ? Math.min(E.maxStrands, Math.round(Math.min(2, E.maxStrands) + Math.max(0, E.maxStrands - 2) * ease(E.reach, E.reach * 0.4, e.d))) : 0;
       if (active < want && time - lastSpawn > rand(0.03, 0.06) && time - lastSnap > 0.4 && !retreatNow) { spawnReach(g); lastSpawn = time; }
@@ -2595,8 +2494,9 @@ function render() {
       const j = Math.round(sp * (NP - 1)) * 3;
       const ax = A.pos[j], ay = A.pos[j + 1], az = A.pos[j + 2], bx = B.pos[j], by = B.pos[j + 1], bz = B.pos[j + 2];
       const dist = Math.hypot(bx - ax, by - ay);
-      const r = 0.22 * E.thickness * clamp(1.6 - dist / 70, 0, 1) * grow * taut;
-      if (r < 0.2) continue;
+      // at least ~1px across: thinner silk renders as a dotted line that looks like the web breaking up
+      const r = 0.6 * E.thickness * clamp(1.6 - dist / 70, 0, 1) * grow * taut;
+      if (r < 0.4) continue;
       const rx = (A.pos[0] + B.pos[0]) / 2, ry = (A.pos[1] + B.pos[1]) / 2;
       let mx = (ax + bx) / 2, my = (ay + by) / 2;
       const dl = Math.hypot(rx - mx, ry - my) || 1, sag = dist * 0.22;
@@ -2773,7 +2673,7 @@ function render() {
   gl.uniform2f(p3.u.uRes, W, H);
   gl.uniform3f(p3.u.uMode, mode.from, mode.to, mode.t);
   gl.uniform1f(p3.u.uDark, theme.d);
-  gl.uniform1f(p3.u.uDot, Math.max(1, Math.round(1.5 * DPR)));   // ~1.5 css px dots
+  gl.uniform1f(p3.u.uDot, Math.max(2, Math.round(2.5 * DPR)));   // ~2.5 css px dots
   gl.uniform2f(p3.u.uCell, cell[0], cell[1]);
   gl.uniform1i(p3.u.uG, 0);   // gTex is still bound to unit 0 from pass 2
   gl.uniform1i(p3.u.uCellT, 8);
